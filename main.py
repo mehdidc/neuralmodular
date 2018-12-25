@@ -108,7 +108,7 @@ elif opt.dataset == 'toy':
             self.nb = nb
 
         def __getitem__(self, idx):
-            im = generate_toy(w=opt.imageSize, h=opt.imageSize, pw=10, ph=10, colored=False)
+            im = generate_toy(w=opt.imageSize, h=opt.imageSize, pw=4, ph=4, colored=False)
             im = im[:, :, 0]
             im = Image.fromarray(im)
             im = transform(im)
