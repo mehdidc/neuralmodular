@@ -130,7 +130,7 @@ ndf = int(opt.ndf)
 
 
 
-netG = Gen(nc=nc, w=opt.imageSize).to(device)
+netG = Gen(nz=nz, nc=nc, w=opt.imageSize).to(device)
 netG.apply(weights_init)
 if opt.netG != '':
     netG.load_state_dict(torch.load(opt.netG))
