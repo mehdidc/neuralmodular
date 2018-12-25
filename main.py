@@ -2,6 +2,7 @@ from __future__ import print_function
 import argparse
 import os
 from PIL import Image
+import numpy as np
 import random
 import torch
 import torch.nn as nn
@@ -138,83 +139,79 @@ def weights_init(m):
         m.bias.data.fill_(0)
 
 
-class Generator(nn.Module):
-    def __init__(self, ngpu):
-        super(Generator, self).__init__()
-        self.ngpu = ngpu
-        self.main = nn.Sequential(
-            # input is Z, going into a convolution
-            nn.ConvTranspose2d(     nz, ngf * 8, 4, 1, 0, bias=False),
-            nn.BatchNorm2d(ngf * 8),
+class Gen(nn.Module):
+    def __init__(self, nz=100, ngf=64, nc=1, act='tanh', w=64):
+        super().__init__()
+        self.act = act
+        nb_blocks = int(np.log(w)/np.log(2)) - 3
+        nf = ngf * 2**(nb_blocks + 1)
+        layers = [
+            nn.ConvTranspose2d(nz, nf, 4, 1, 0, bias=False),
+            nn.BatchNorm2d(nf),
             nn.ReLU(True),
-            # state size. (ngf*8) x 4 x 4
-            nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(ngf * 4),
-            nn.ReLU(True),
-            # state size. (ngf*4) x 8 x 8
-            nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(ngf * 2),
-            nn.ReLU(True),
-            # state size. (ngf*2) x 16 x 16
-            nn.ConvTranspose2d(ngf * 2,     ngf, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(ngf),
-            nn.ReLU(True),
-            # state size. (ngf) x 32 x 32
-            nn.ConvTranspose2d(    ngf,      nc, 4, 2, 1, bias=False),
-            nn.Tanh()
-            # state size. (nc) x 64 x 64
+        ]
+        for _ in range(nb_blocks):
+            layers.extend([
+                nn.ConvTranspose2d(nf, nf // 2, 4, 2, 1, bias=False),
+                nn.BatchNorm2d(nf // 2),
+                nn.ReLU(True),
+            ]) 
+            nf = nf // 2
+        layers.append(
+            nn.ConvTranspose2d(nf, nc, 4, 2, 1, bias=False)
         )
+        self.main = nn.Sequential(*layers)
+        self.apply(weights_init)
 
     def forward(self, input):
-        if input.is_cuda and self.ngpu > 1:
-            output = nn.parallel.data_parallel(self.main, input, range(self.ngpu))
-        else:
-            output = self.main(input)
-        return output
+        out = self.main(input)
+        if self.act == 'tanh':
+            out = nn.Tanh()(out)
+        elif self.act == 'sigmoid':
+            out = nn.Sigmoid()(out)
+        return out
 
 
-netG = Generator(ngpu).to(device)
+class Discr(nn.Module):
+
+    def __init__(self, nc=1, ndf=64, act='sigmoid', no=1, w=64):
+        super().__init__()
+        self.act = act
+        self.no = no
+
+        nb_blocks = int(np.log(w)/np.log(2)) - 3
+        nf = ndf 
+        layers = [
+            nn.Conv2d(nc, nf, 4, 2, 1, bias=False),
+            nn.LeakyReLU(0.2, inplace=True),
+        ]
+        for _ in range(nb_blocks):
+            layers.extend([
+                nn.Conv2d(nf, nf * 2, 4, 2, 1, bias=False),
+                nn.BatchNorm2d(nf * 2),
+                nn.LeakyReLU(0.2, inplace=True),
+            ])
+            nf = nf * 2
+        layers.append(
+            nn.Conv2d(nf, no, 4, 1, 0, bias=False)
+        )
+        self.main = nn.Sequential(*layers)
+        self.apply(weights_init)
+
+    def forward(self, input):
+        out = self.main(input)
+        if self.act == 'tanh':
+            out = nn.Tanh()(out)
+        elif self.act == 'sigmoid':
+            out = nn.Sigmoid()(out)
+        return out.view(-1, self.no)
+
+netG = Gen(nc=nc, w=opt.imageSize).to(device)
 netG.apply(weights_init)
 if opt.netG != '':
     netG.load_state_dict(torch.load(opt.netG))
 print(netG)
-
-
-class Discriminator(nn.Module):
-    def __init__(self, ngpu):
-        super(Discriminator, self).__init__()
-        self.ngpu = ngpu
-        self.main = nn.Sequential(
-            # input is (nc) x 64 x 64
-            nn.Conv2d(nc, ndf, 4, 2, 1, bias=False),
-            nn.LeakyReLU(0.2, inplace=True),
-            # state size. (ndf) x 32 x 32
-            nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(ndf * 2),
-            nn.LeakyReLU(0.2, inplace=True),
-            # state size. (ndf*2) x 16 x 16
-            nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(ndf * 4),
-            nn.LeakyReLU(0.2, inplace=True),
-            # state size. (ndf*4) x 8 x 8
-            nn.Conv2d(ndf * 4, ndf * 8, 4, 2, 1, bias=False),
-            nn.BatchNorm2d(ndf * 8),
-            nn.LeakyReLU(0.2, inplace=True),
-            # state size. (ndf*8) x 4 x 4
-            nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False),
-            nn.Sigmoid()
-        )
-
-    def forward(self, input):
-        if input.is_cuda and self.ngpu > 1:
-            output = nn.parallel.data_parallel(self.main, input, range(self.ngpu))
-        else:
-            output = self.main(input)
-
-        return output.view(-1, 1).squeeze(1)
-
-
-netD = Discriminator(ngpu).to(device)
+netD = Discr(nc=nc, w=opt.imageSize).to(device)
 netD.apply(weights_init)
 if opt.netD != '':
     netD.load_state_dict(torch.load(opt.netD))
